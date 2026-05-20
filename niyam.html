@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Niyam — Pulse Breathing</title>
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #fafafa;
+        font-family: Verdana, sans-serif;
+        overflow: hidden;
+    }
+    body.night { background: #111; }
+
+    #pulse {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+    #pulse canvas {
+        width: min(90vmin, 681px);
+        height: min(90vmin, 681px);
+        display: block;
+    }
+
+    #controls {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        background: rgba(255,255,255,0.75);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        line-height: 1.6;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        user-select: none;
+        backdrop-filter: blur(6px);
+    }
+    body.night #controls {
+        background: rgba(20,20,20,0.7);
+        color: #ddd;
+    }
+    #controls label { display: block; }
+    #controls input[type=number] { width: 50px; }
+    #controls .row { display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+
+<div id="pulse">
+    <canvas width="681" height="681"></canvas>
+</div>
+
+<div id="controls">
+    <div class="row"><label>Inhale</label><input id="s0" type="number" min="0" step="1" value="4">s</div>
+    <div class="row"><label>Hold</label><input id="s1" type="number" min="0" step="1" value="0">s</div>
+    <div class="row"><label>Exhale</label><input id="s2" type="number" min="0" step="1" value="6">s</div>
+    <div class="row"><label>Hold</label><input id="s3" type="number" min="0" step="1" value="0">s</div>
+    <div class="row"><label><input id="words" type="checkbox" checked> Show words</label></div>
+    <div class="row"><label><input id="theme" type="checkbox"> Dark theme</label></div>
+</div>
+
+<script>
+/* ---------- helpers ---------- */
+function overRide(op, ov) {
+    if (!ov) return op;
+    for (var i in ov) op[i] = ov[i];
+    return op;
+}
+function rand(a, b) { return Math.round(Math.random() * (b - a)) + a; }
+function clamp(v, lo, hi) { return v < lo ? lo : (hi !== undefined && v > hi ? hi : v); }
+function degreesToRadians(d) { return d * Math.PI / 180; }
+
+function RGB(r, g, b) {
+    this.r = r; this.g = g; this.b = b;
+    this.str = "rgb(" + r + "," + g + "," + b + ")";
+}
+function lighten(c, t) {
+    return "rgb(" +
+        clamp(Math.floor(c.r * t), 0, 255) + "," +
+        clamp(Math.floor(c.g * t), 0, 255) + "," +
+        clamp(Math.floor(c.b * t), 0, 255) + ")";
+}
+function Pulse(len, startSize, endSize, phrase) {
+    this.length = len;
+    this.start_size = startSize;
+    this.end_size = endSize;
+    this.phrase = phrase;
+}
+
+/* ---------- draw primitives (from draw.js) ---------- */
+function strokeIt(ctx, options) {
+    if (!options) return;
+    if (options.lineWidth) {
+        overRide(ctx, options);
+        ctx.stroke();
+    }
+}
+function fillIt(ctx, options) {
+    if (!options) return;
+    if (options.fillStyle) {
+        overRide(ctx, options);
+        ctx.fill();
+    }
+}
+function drawCircle(ctx, x, y, r, options) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    fillIt(ctx, options);
+    strokeIt(ctx, options);
+}
+function drawPulse2(ctx, x, y, oRadius, iRadius, options) {
+    drawCircle(ctx, x, y, oRadius, options);
+    ctx.globalCompositeOperation = "destination-out";
+    drawCircle(ctx, x, y, iRadius, options);
+    ctx.globalCompositeOperation = "source-over";
+}
+function drawPie(ctx, x, y, outerRadius, innerRadius, startangle, endangle, additive, options) {
+    var startingAngle = degreesToRadians(startangle);
+    var arcSize = degreesToRadians(endangle);
+    var endingAngle = startingAngle + arcSize;
+    ctx.beginPath();
+    ctx.arc(x, y, outerRadius, startingAngle, endingAngle, !additive);
+    ctx.arc(x, y, innerRadius, endingAngle, startingAngle, additive);
+    ctx.closePath();
+    fillIt(ctx, options);
+    strokeIt(ctx, options);
+}
+function drawText(ctx, text, x, y, options) {
+    var o = overRide({
+        strokeStyle: "black",
+        lineWidth: 0,
+        textAlign: "center",
+        font: "16px Verdana"
+    }, options);
+    overRide(ctx, o);
+    ctx.globalCompositeOperation = "destination-out";
+    if (o.lineWidth) ctx.strokeText(text, x, y);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillText(text, x, y);
+}
+
+/* ---------- state ---------- */
+var cvs = document.querySelector("#pulse canvas");
+var ctx = cvs.getContext("2d");
+var cvsW, cvsH;
+
+var pspeeds = [4, 0, 6, 0];                       // seconds for inhale / hold / exhale / hold
+var pposition = 0;
+var ptimer = null;
+var pcolor = new RGB(150, 150, 200);
+var darkcolor = "#111";
+var plang = { Phrases: { TextInhale: "Inhale", TextExhale: "Exhale", TextHold: "Hold", TextReady: "Ready" } };
+
+var smalltextscale = 0.045;
+var largetextscale = 0.15;
+var framespersecond = 40;
+var framelengthpersecond = 1000 / framespersecond;
+var currentframe = 0;
+
+/* ---------- sizing ---------- */
+function resize() {
+    var rect = cvs.getBoundingClientRect();
+    var scale = 3;
+    cvsW = Math.max(1, Math.floor(rect.width * scale));
+    cvsH = Math.max(1, Math.floor(rect.height * scale));
+    cvs.width = cvsW;
+    cvs.height = cvsH;
+}
+window.addEventListener("resize", function () {
+    resize();
+});
+
+/* ---------- helpers ---------- */
+function getThemeColor() { return document.getElementById("theme").checked ? darkcolor : "white"; }
+function stopBreath() {
+    if (ptimer) { clearInterval(ptimer); clearTimeout(ptimer); ptimer = null; }
+}
+function nextPPosition() {
+    if (++pposition >= pspeeds.length) pposition = 0;
+    return pposition;
+}
+
+/* ---------- core animation (from sb.js TweenPulse) ---------- */
+function TweenPulse() {
+    if (!pspeeds[pposition]) {
+        nextPPosition();
+        TweenPulse();
+        return;
+    }
+    var ms = 1000 * pspeeds[pposition];
+    var n = cvsW / 2;
+    var l = cvsH / 2;
+
+    var t = (pposition === 1 || pposition === 2);
+    var s = (pposition === 2 || pposition === 3);
+
+    var o = t ? 0.8 * n : 0.2 * n;
+    var c = s ? 0.2 * n : 0.8 * n;
+    var i = c - o;
+
+    var a = t ? cvsW * largetextscale : cvsW * smalltextscale;
+    var u = (s ? cvsW * smalltextscale : cvsW * largetextscale) - a;
+
+    var phrase =
+        (pposition === 1 || pposition === 3) ? plang.Phrases.TextHold :
+        (pposition === 0) ? plang.Phrases.TextInhale :
+        plang.Phrases.TextExhale;
+
+    var totalFrames = ms / framelengthpersecond;
+    currentframe = 0;
+
+    var startColor = new RGB(pcolor.r, pcolor.g, pcolor.b);
+    var pool = [rand(100, 230), rand(100, 230), rand(100, 230)];
+    var endColor = new RGB(
+        pool.splice(rand(0, 2), 1)[0],
+        pool.splice(rand(0, 1), 1)[0],
+        pool.pop()
+    );
+    var delta = new RGB(endColor.r - startColor.r, endColor.g - startColor.g, endColor.b - startColor.b);
+
+    ptimer = setInterval(function () {
+        ctx.clearRect(0, 0, cvsW, cvsH);
+
+        var e = currentframe / totalFrames;
+        var col = new RGB(
+            Math.floor(startColor.r + delta.r * e),
+            Math.floor(startColor.g + delta.g * e),
+            Math.floor(startColor.b + delta.b * e)
+        );
+
+        // donut
+        drawPulse2(ctx, n, l, n, o + i * e, { fillStyle: col.str });
+
+        if (pposition === 0 || pposition === 2) {
+            // thin outline ring during inhale / exhale
+            drawCircle(ctx, n, l, c, {
+                strokeStyle: pposition === 2
+                    ? "rgba(" + col.r + "," + col.g + "," + col.b + ",0.2)"
+                    : (document.getElementById("theme").checked ? "rgba(0,0,0,0.1)" : "rgba(255,255,255,0.1)"),
+                fillStyle: "transparent",
+                lineWidth: 0.01 * cvsW
+            });
+        } else {
+            // hold: pie sweep via destination-out
+            var sweep = e > 0 ? -360 * (1 - e) : 0;
+            ctx.globalCompositeOperation = "destination-out";
+            drawPie(ctx, n, l,
+                n * (0.8 + e * (1 - 0.8)),
+                2 + n,
+                -90, sweep, true,
+                { fillStyle: lighten(col, 0.8) });
+            ctx.globalCompositeOperation = "source-over";
+        }
+
+        if (document.getElementById("words").checked) {
+            drawText(ctx, phrase, n, l + (a + u * e) / 3, {
+                fillStyle: col.str,
+                lineWidth: 0.02 * cvsW,
+                lineJoin: "round",
+                strokeStyle: document.getElementById("theme").checked ? darkcolor : "white",
+                font: (a + u * e) + "px verdana"
+            });
+        }
+
+        if (currentframe >= totalFrames) {
+            pcolor = endColor;
+            clearInterval(ptimer);
+            nextPPosition();
+            TweenPulse();
+        } else {
+            currentframe++;
+        }
+    }, framelengthpersecond);
+}
+
+/* ---------- countdown / start ---------- */
+function runCountdown() {
+    var n = cvsW / 2;
+    var ts = cvsW * smalltextscale;
+
+    function frame(text, next, delay) {
+        ctx.clearRect(0, 0, cvsW, cvsH);
+        drawPulse2(ctx, n, n, n, 0.2 * n, { fillStyle: pcolor.str });
+        drawText(ctx, text, n, n + ts / 3, {
+            fillStyle: pcolor.str,
+            font: ts + "px verdana",
+            lineWidth: 0.02 * cvsW,
+            lineJoin: "round",
+            strokeStyle: getThemeColor()
+        });
+        ptimer = setTimeout(next, delay);
+    }
+
+    frame(plang.Phrases.TextReady, function () {
+        frame("3", function () {
+            frame("2", function () {
+                frame("1", function () {
+                    TweenPulse();
+                }, 1000);
+            }, 1000);
+        }, 1000);
+    }, 2000);
+}
+
+/* ---------- wire up controls ---------- */
+function readSpeeds() {
+    pspeeds = [
+        +document.getElementById("s0").value || 0,
+        +document.getElementById("s1").value || 0,
+        +document.getElementById("s2").value || 0,
+        +document.getElementById("s3").value || 0
+    ];
+}
+["s0", "s1", "s2", "s3"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function () {
+        readSpeeds();
+        stopBreath();
+        pposition = 0;
+        TweenPulse();
+    });
+});
+document.getElementById("theme").addEventListener("change", function () {
+    document.body.classList.toggle("night", this.checked);
+});
+document.getElementById("controls").addEventListener("click", function (e) {
+    e.stopPropagation();
+});
+
+/* ---------- boot ---------- */
+resize();
+readSpeeds();
+runCountdown();
+</script>
+</body>
+</html>
