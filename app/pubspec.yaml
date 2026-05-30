@@ -1,0 +1,60 @@
+name: niyam
+description: "niyam — breathe with discipline. A modern, minimal breathing-habit app."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management — compile-safe, BuildContext-free, family/autoDispose
+  flutter_riverpod: ^2.5.1
+
+  # Local storage — actively-maintained Hive fork
+  hive_ce: ^2.10.0
+  hive_ce_flutter: ^2.0.0
+  path_provider: ^2.1.5
+
+  # Navigation + deep links
+  go_router: ^14.6.1
+
+  # Audio — soundscape loops + voice cues
+  just_audio: ^0.9.42
+  audio_session: ^0.1.21
+
+  # Local notifications (daily reminder)
+  flutter_local_notifications: ^17.2.4
+  timezone: ^0.9.4
+  permission_handler: ^11.3.1
+
+  # Charts + animations
+  fl_chart: ^0.69.0
+  lottie: ^3.2.0
+  flutter_animate: ^4.5.2
+
+  # Misc
+  google_fonts: ^6.2.1
+  intl: ^0.20.1
+  share_plus: ^10.1.2
+  package_info_plus: ^8.1.1
+  flutter_displaymode: ^0.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sounds/
+    - assets/images/
+    - assets/articles/
+    - assets/data/
