@@ -20,16 +20,18 @@ class SessionPage extends ConsumerStatefulWidget {
 class _SessionPageState extends ConsumerState<SessionPage> {
   static const _steps = ['Ready', '3', '2', '1', 'Breathe'];
   int _stepIdx = 0;
+  // Capture the audio service in initState so dispose() doesn't touch ref.
+  AudioService? _audio;
 
   @override
   void initState() {
     super.initState();
+    _audio = ref.read(audioServiceProvider);
     WidgetsBinding.instance.addPostFrameCallback((_) => _runCountdown());
-    // Start preferred soundscape
     final prefs = ref.read(prefsProvider);
     if (prefs.defaultSound.isNotEmpty && prefs.defaultSound != 'none') {
       // ignore: discarded_futures
-      ref.read(audioServiceProvider).play(prefs.defaultSound, volume: prefs.volume);
+      _audio!.play(prefs.defaultSound, volume: prefs.volume);
     }
   }
 
@@ -45,8 +47,9 @@ class _SessionPageState extends ConsumerState<SessionPage> {
 
   @override
   void dispose() {
+    // Use the captured service — never touch `ref` in dispose().
     // ignore: discarded_futures
-    ref.read(audioServiceProvider).stop();
+    _audio?.stop();
     super.dispose();
   }
 
